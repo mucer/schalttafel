@@ -1,14 +1,12 @@
 #include <Arduino.h>
 #include "io.h"
-#include "state.h"
+#include "element.h"
 
-State::State(String name, IO *button, IO *led, IO *relais)
+Element::Element(String name, IO *button, IO *led, IO *relais)
     : _name(name),
       _button(button),
       _led(led),
-      _relais(relais),
-      _lastButtonState(false),
-      _status(Status::INACTIVE)
+      _relais(relais)
 {
     if (_button)
         _button->setMode(INPUT_PULLUP);
@@ -19,25 +17,25 @@ State::State(String name, IO *button, IO *led, IO *relais)
     updateOutputs();
 }
 
-bool State::update()
+bool Element::update()
 {
     if (!_button)
         return false;
 
-    bool currentState = !_button->read();
+    bool currentElement = !_button->read();
     bool stateChanged = false;
 
-    if (currentState && !_lastButtonState)
+    if (currentElement && !_lastButtonState)
     {
-        _status = (_status == Status::ACTIVE) ? Status::INACTIVE : Status::ACTIVE;
+        _status = (_status == ElementStatus::ACTIVE) ? ElementStatus::INACTIVE : ElementStatus::ACTIVE;
         updateOutputs();
         stateChanged = true;
     }
-    _lastButtonState = currentState;
+    _lastButtonState = currentElement;
     return stateChanged;
 }
 
-bool State::setStatus(Status newStatus)
+bool Element::setStatus(ElementStatus newStatus)
 {
     if (_status != newStatus)
     {
@@ -48,19 +46,19 @@ bool State::setStatus(Status newStatus)
     return false;
 }
 
-Status State::getStatus() const
+ElementStatus Element::getStatus() const
 {
     return _status;
 }
 
-String State::getName() const
+String Element::getName() const
 {
     return _name;
 }
 
-void State::updateOutputs()
+void Element::updateOutputs()
 {
-    bool outputActive = (_status == Status::ACTIVE);
+    bool outputActive = (_status == ElementStatus::ACTIVE);
     if (_led)
         _led->write(outputActive);
     if (_relais)

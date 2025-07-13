@@ -3,14 +3,16 @@
 #include <vector>
 #include <Adafruit_MCP23X17.h>
 #include "io.h"
-#include "state.h"
+#include "element.h"
+#include "bluetooth.cpp"
 
 #define I2C_SDA 25
 #define I2C_SCL 26
 #define MCP_1_ADDR 0x20
 
+std::vector<Element *> _elements;
 Adafruit_MCP23X17 mcp1;
-std::vector<State *> _states;
+BluetoothManager bleManager(&_elements);
 
 void setup()
 {
@@ -27,63 +29,66 @@ void setup()
   }
   Serial.println("MCP Ready");
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Toplicht",
       new MCP_IO(&mcp1, 7),
       new MCP_IO(&mcp1, 7 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Navigationslicht",
       new MCP_IO(&mcp1, 6),
       new MCP_IO(&mcp1, 6 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Kabinenlicht",
       new MCP_IO(&mcp1, 5),
       new MCP_IO(&mcp1, 5 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Steckdosen innen",
       new MCP_IO(&mcp1, 4),
       new MCP_IO(&mcp1, 4 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Steckdosen außen",
       new MCP_IO(&mcp1, 3),
       new MCP_IO(&mcp1, 3 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Frischwasserpumpe",
       new MCP_IO(&mcp1, 2),
       new MCP_IO(&mcp1, 2 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Navigationssystem",
       new MCP_IO(&mcp1, 1),
       new MCP_IO(&mcp1, 1 + 8),
       nullptr));
 
-  _states.push_back(new State(
+  _elements.push_back(new Element(
       "Bordcomputer",
       new MCP_IO(&mcp1, 0),
       new MCP_IO(&mcp1, 0 + 8),
       nullptr));
+
+  bleManager.init();
 }
 
 void loop()
 {
-  for (State *state : _states)
+  for (Element *state : _elements)
   {
     if (state->update())
     {
-      String message = state->getName() + ":" + (state->getStatus() == Status::ACTIVE ? "ON" : "OFF");
-      Serial.println("State changed: " + message);
+      String message = state->getName() + ":" + (state->getStatus() == ElementStatus::ACTIVE ? "ON" : "OFF");
+      Serial.println("Element changed: " + message);
+      bleManager.updateElements();
     }
   }
 

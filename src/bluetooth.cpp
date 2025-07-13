@@ -3,128 +3,145 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <vector>
+#include "element.h"
 
-class MyServerCallbacks : public BLEServerCallbacks {
-    private:
-        // Reference to a boolean flag in BluetoothManager to update connection status
-        bool& _deviceConnected;
-    
-    public:
-        // Constructor: Takes a reference to the connection status flag
-        MyServerCallbacks(bool& deviceConnectedFlag) : _deviceConnected(deviceConnectedFlag) {}
-    
-        // Called when a BLE client connects
-        void onConnect(BLEServer* pServer) override {
-            Serial.println("BLE connected");
-            _deviceConnected = true;
+#define BLE_NAME "Schalttafel"
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c3319141"
+#define CHARACTERISTIC_NAMES "4fafc201-1fb5-459e-8fcc-c5c9c3319142"
+#define CHARACTERISTIC_ALL "4fafc201-1fb5-459e-8fcc-c5c9c3319143"
+#define CHARACTERISTIC_WRITE "4fafc201-1fb5-459e-8fcc-c5c9c3319144"
+
+class BluetoothManager : public BLEServerCallbacks, public BLECharacteristicCallbacks
+{
+private:
+    std::vector<Element *> *_states;
+    BLECharacteristic *_names = nullptr;
+    BLECharacteristic *_values = nullptr;
+    BLECharacteristic *_write = nullptr;
+    bool _deviceConnected = false;
+
+    // uint8_t statusValue(const ElementStatus &status)
+    // {
+    //     switch (status)
+    //     {
+    //     case ElementStatus::INACTIVE:
+    //         return 0x00;
+    //     case ElementStatus::ACTIVE:
+    //         return 0x01;
+    //     case ElementStatus::ERROR:
+    //         return 0x02;
+    //     default:
+    //         return 0x03;
+    //     }
+    // }
+
+    void setNames()
+    {
+        String names;
+        for (Element *state : *_states)
+        {
+            if (!names.isEmpty())
+            {
+                names += "|";
+            }
+            names += state->getName();
         }
-    
-        // Called when a BLE client disconnects
-        void onDisconnect(BLEServer* pServer) override {
-            Serial.println("BLE disconnected");
-            _deviceConnected = false;
-            // Restart advertising to allow new connections
-            pServer->getAdvertising()->start();
+
+        _names->setValue(names.c_str());
+    }
+
+    void setValues()
+    {
+        size_t size = _states->size();
+        uint8_t temp[size];
+        for (size_t i = 0; i < size; ++i)
+        {
+            temp[i] = static_cast<uint8_t>((*_states)[i]->getStatus());
         }
-    };
-    
-    // Callback class for BLE Characteristic write events (from client to server)
-    class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-    private:
-        // Callback function to be invoked when a state change request is received via BLE
-        // This function will typically be set by the LightControlApp to handle the request.
-        std::function<void(const String&, bool)> _onCommandReceived;
-    
-    public:
-        // Constructor: Takes a function pointer/lambda for handling received commands
-        MyCharacteristicCallbacks(std::function<void(const String&, bool)> onCommand)
-            : _onCommandReceived(onCommand) {}
-    
-        // Called when a client writes to this characteristic
-        void onWrite(BLECharacteristic *pCharacteristic) override {
-            std::string rxValue = pCharacteristic->getValue(); // Get the received value
-    
-            if (rxValue.length() > 0) {
-                Serial.print("Received BLE command: ");
-                for (int i = 0; i < rxValue.length(); i++) {
-                    Serial.print(rxValue[i]);
-                }
-                Serial.println();
-    
-                // Example: Parse command "NAME,STATE" (e.g., "Toplicht,ON" or "Navilicht,OFF")
-                String command = String(rxValue.c_str());
-                int commaIndex = command.indexOf(',');
-                if (commaIndex != -1) {
-                    String name = command.substring(0, commaIndex);
-                    String stateStr = command.substring(commaIndex + 1);
-                    bool newState = (stateStr.equalsIgnoreCase("ON") || stateStr.equalsIgnoreCase("ACTIVE"));
-    
-                    if (_onCommandReceived) {
-                        _onCommandReceived(name, newState);
-                    }
+
+        _values->setValue(temp, size);
+    }
+
+public:
+    BluetoothManager(std::vector<Element *> *states)
+        : _states(states)
+    {
+    }
+
+    void init()
+    {
+        Serial.println("Initializing BLE...");
+        BLEDevice::init(BLE_NAME);
+
+        BLEServer *pServer = BLEDevice::createServer();
+        pServer->setCallbacks(this);
+        BLEService *pService = pServer->createService(SERVICE_UUID);
+
+        _names = pService->createCharacteristic(
+            CHARACTERISTIC_NAMES, BLECharacteristic::PROPERTY_READ);
+
+        _values = pService->createCharacteristic(
+            CHARACTERISTIC_ALL, BLECharacteristic::PROPERTY_READ |
+                                    BLECharacteristic::PROPERTY_NOTIFY);
+        _values->addDescriptor(new BLE2902());
+
+        _write = pService->createCharacteristic(
+            CHARACTERISTIC_WRITE,
+            BLECharacteristic::PROPERTY_WRITE);
+        _write->setCallbacks(this);
+
+        setNames();
+        pService->start();
+        pServer->getAdvertising()->start();
+        Serial.println("BLE service started and advertising.");
+    }
+
+    void onConnect(BLEServer *pServer) override
+    {
+        Serial.println("BLE connected");
+        _deviceConnected = true;
+        setValues();
+    }
+
+    void onDisconnect(BLEServer *pServer) override
+    {
+        Serial.println("BLE disconnected");
+        _deviceConnected = false;
+        pServer->getAdvertising()->start();
+    }
+
+    void onWrite(BLECharacteristic *pCharacteristic) override
+    {
+        size_t length = pCharacteristic->getLength();
+
+        if (length == 2)
+        {
+            uint8_t *data = pCharacteristic->getData();
+            if (data[0] < _states->size())
+            {
+                Element *element = (*_states)[data[0]];
+                ElementStatus newStatus = static_cast<ElementStatus>(data[1]);
+                if (element->setStatus(newStatus))
+                {
+                    Serial.printf("Element %s status changed to %d\n", element->getName().c_str(), static_cast<int>(newStatus));
+                    updateElements();
                 }
             }
         }
-    };
-    
-    
-    // Manages all Bluetooth Low Energy (BLE) communication
-    class BluetoothManager {
-    private:
-        BLECharacteristic* _pCharacteristic; // The BLE characteristic for communication
-        bool _deviceConnected; // Flag to track BLE connection status
-        MyServerCallbacks* _serverCallbacks; // Instance of server callbacks
-        MyCharacteristicCallbacks* _characteristicCallbacks; // Instance of characteristic callbacks
-    
-    public:
-        // Constructor: Initializes the connection flag and sets up callback instances
-        BluetoothManager() : _pCharacteristic(nullptr), _deviceConnected(false) {
-            _serverCallbacks = new MyServerCallbacks(_deviceConnected);
+    }
+
+    void updateElements()
+    {
+        if (_deviceConnected)
+        {
+            setValues();
+            _values->notify();
         }
-    
-        // Destructor: Cleans up dynamically allocated callback objects
-        ~BluetoothManager() {
-            delete _serverCallbacks;
-            delete _characteristicCallbacks;
-        }
-    
-        // Initializes the BLE service
-        void init(const char* bleName, const char* serviceUUID, const char* characteristicUUID,
-                  std::function<void(const String&, bool)> onCommand) {
-            Serial.println("Initializing BLE...");
-            BLEDevice::init(bleName); // Initialize BLE device with a name
-            BLEServer* pServer = BLEDevice::createServer(); // Create a BLE server
-            pServer->setCallbacks(_serverCallbacks); // Set server callbacks
-    
-            BLEService* pService = pServer->createService(serviceUUID); // Create a BLE service
-            _pCharacteristic = pService->createCharacteristic(
-                characteristicUUID,
-                BLECharacteristic::PROPERTY_READ |
-                BLECharacteristic::PROPERTY_WRITE |
-                BLECharacteristic::PROPERTY_NOTIFY
-            );
-            _pCharacteristic->addDescriptor(new BLE2902()); // Add a standard descriptor
-            
-            // Set characteristic callbacks for incoming writes
-            _characteristicCallbacks = new MyCharacteristicCallbacks(onCommand);
-            _pCharacteristic->setCallbacks(_characteristicCallbacks);
-    
-            pService->start(); // Start the BLE service
-            pServer->getAdvertising()->start(); // Start advertising to allow connections
-            Serial.println("BLE service started and advertising.");
-        }
-    
-        // Sends a state update string over BLE
-        void sendStateUpdate(const String& message) {
-            if (_deviceConnected && _pCharacteristic) {
-                _pCharacteristic->setValue(message.c_str()); // Set the characteristic value
-                _pCharacteristic->notify(); // Notify connected clients
-                // Serial.println("BLE Notified: " + message); // Uncomment for debugging
-            }
-        }
-    
-        // Checks if a device is currently connected
-        bool isDeviceConnected() const {
-            return _deviceConnected;
-        }
-    };
+    }
+
+    bool isDeviceConnected() const
+    {
+        return _deviceConnected;
+    }
+};
