@@ -62,5 +62,5 @@ void Element::updateOutputs()
     if (_led)
         _led->write(outputActive);
     if (_relais)
-        _relais->write(outputActive);
+        _relais->write(!outputActive);
 }
